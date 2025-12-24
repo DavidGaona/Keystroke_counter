@@ -16,10 +16,17 @@ const WindowCache = struct {
     window_title_len: usize = 0,
 };
 
+const WinHooks = struct {
+    keyboard_hook: win32.HHOOK,
+    window_foreground_hook: win32.HWINEVENTHOOK
+};
+
 threadlocal var global_callback: ?*const fn (types.KeyEvent, *stats.TypingStats) void = null;
 threadlocal var key_stats: ?*stats.TypingStats = null;
 threadlocal var control_keys: stats.ControlKeys = @bitCast(@as(u8, 0));
 threadlocal var control_keys_time = [_]u32{0} ** 8;
+threadlocal var win_hooks: WinHooks = undefined;
+threadlocal var window_cache: WindowCache = undefined;
 
 fn hookProc(
     n_code: c_int,
@@ -103,12 +110,64 @@ fn hookProc(
     return win32.CallNextHookEx(null, n_code, w_param, l_param);
 }
 
+fn winEventProc(
+    h_win_event_hook: win32.HWINEVENTHOOK,
+    event: u32,
+    hwnd: win32.HWND,
+    id_object: i32,
+    id_child: i32,
+    id_event_thread: u32,
+    dwms_event_time: u32
+) callconv(.winapi) void {
+    _ = dwms_event_time; // autofix
+    _ = id_event_thread;
+    _ = id_child; // autofix
+    _ = id_object; // autofix
+    _ = h_win_event_hook; // autofix
+    if (event == win32.EVENT_SYSTEM_FOREGROUND) {
+        window_cache.window_title_len = @intCast(win32.GetWindowTextA(
+            hwnd,
+            &window_cache.window_title,
+            255,
+        ));
 
+        var process_id: u32 = 0;
+        _ = win32.GetWindowThreadProcessId(hwnd, &process_id);
+
+        const process_handle = win32.OpenProcess(
+            win32.PROCESS_QUERY_LIMITED_INFORMATION,
+            0,
+            process_id,
+        ) orelse return;
+        defer _ = win32.CloseHandle(process_handle);
+
+        var path_buffer: [win32.MAX_PATH]u8 = undefined;
+        var path_size: u32 = win32.MAX_PATH;
+
+        const success = win32.QueryFullProcessImageNameA(
+            process_handle,
+            0,
+            &path_buffer,
+            &path_size,
+        );
+
+        if (success != 0) {
+            const full_path = path_buffer[0..path_size];
+            const filename = std.fs.path.basename(full_path);
+
+            @memcpy(window_cache.exe_name[0..filename.len], filename);
+            window_cache.exe_name_len = filename.len;
+        }
+
+        std.debug.print("Window title: {s}\n", .{window_cache.window_title[0..window_cache.window_title_len]});
+        std.debug.print("Exe: {s}\n", .{window_cache.exe_name[0..window_cache.exe_name_len]});
+    }
+}
 
 pub fn install(
     callback: *const fn (types.KeyEvent, *stats.TypingStats) void,
     key_log_stats: *stats.TypingStats
-) !types.KeyboardHook {
+) !void {
     global_callback = callback;
     key_stats = key_log_stats;
 
@@ -118,28 +177,34 @@ pub fn install(
     // lpfn: Hook procedure
     // hMod: NULL for low-level hooks (they run in calling thread's context)
     // dwThreadId: 0 for system-wide hook
-    const hook = win32.SetWindowsHookExA(
+    win_hooks.keyboard_hook = win32.SetWindowsHookExA(
         win32.WH_KEYBOARD_LL,  // 13
         hookProc,
         null,  // Must be NULL for WH_KEYBOARD_LL
         0,     // 0 = monitor all threads (system-wide)
-    ) orelse return error.HookInstallFailed;
+    ) orelse return error.KeyboardHookInstallFailed;
 
-    return types.KeyboardHook{
-        .callback = callback,
-        .platform_data = @intFromPtr(hook),
-    };
+    win_hooks.window_foreground_hook = win32.SetWinEventHook(
+        win32.EVENT_SYSTEM_FOREGROUND,
+        win32.EVENT_SYSTEM_FOREGROUND,
+        null,
+        winEventProc,
+        0,
+        0,
+        win32.WINEVENT_OUTOFCONTEXT
+    ) orelse return error.WindowHookInstallFailed;
 }
 
 // Ref: https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-unhookwindowshookex
-pub fn uninstall(hook: *types.KeyboardHook) void {
-    const hhook: win32.HHOOK = unsafePtrCast(hook.platform_data);
-    _ = win32.UnhookWindowsHookEx(hhook);
+pub fn uninstall() void {
+    _ = win32.UnhookWindowsHookEx(win_hooks.keyboard_hook);
+    _ = win32.UnhookWinEvent(win_hooks.window_foreground_hook);
     global_callback = null;
 }
 
 // Necessary for Debug and Release safe, in ReleaseFast or ReleaseSmall @ptrFromInt can be
-// used instead
+// used instead when casting from usize back to windows handle ptr
+// const hhook: win32.HHOOK = unsafePtrCast(hook);
 fn unsafePtrCast(value: usize) win32.HHOOK {
     @setRuntimeSafety(false);
     return @ptrFromInt(value);
@@ -330,5 +395,8 @@ pub fn vkToUsbHid(vk_code: u32) stats.UsbHidKey {
     const hid_code = win32_vk_to_usb_hid[vk_code];
     return @enumFromInt(hid_code);
 }
+
+
+
 
 

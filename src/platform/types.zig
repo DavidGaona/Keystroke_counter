@@ -6,8 +6,3 @@ pub const KeyEvent = struct {
     //scan_code: u32,
     //flags: u32,
 };
-
-pub const KeyboardHook = struct {
-    callback: *const fn (KeyEvent, *stats.TypingStats) void,
-    platform_data: usize,
-};

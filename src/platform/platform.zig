@@ -9,7 +9,7 @@ pub const types = @import("types.zig");
 pub fn install(
     hook_func: *const fn (types.KeyEvent, *stats.TypingStats) void,
     key_log_stats: *stats.TypingStats
-) !types.KeyboardHook {
+) !void {
     return switch (builtin.os.tag) {
         .windows => try win32.install(hook_func, key_log_stats),
         .linux => {},
@@ -18,9 +18,9 @@ pub fn install(
     };
 }
 
-pub fn uninstall(keyboard_hook: *types.KeyboardHook) void {
+pub fn uninstall() void {
     switch (builtin.os.tag) {
-        .windows => win32.uninstall(keyboard_hook),
+        .windows => win32.uninstall(),
         .linux => {},
         .macos => {},
         else => {},

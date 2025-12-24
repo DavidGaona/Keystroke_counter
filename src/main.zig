@@ -503,8 +503,8 @@ pub fn main() !void {
     };
     const target = try rl.loadRenderTexture(screen_width, screen_height);
 
-    var hook = try pf.install(&recordKeyEvent, &typing_stats);
-    defer pf.uninstall(&hook);
+    try pf.install(&recordKeyEvent, &typing_stats);
+    defer pf.uninstall();
     rl.setTargetFPS(60);
 
     const default_font = try rl.getFontDefault();
